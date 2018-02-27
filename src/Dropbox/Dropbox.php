@@ -227,17 +227,18 @@ class Dropbox
     /**
      * Make Request to the API
      *
-     * @param  string $method       HTTP Request Method
-     * @param  string $endpoint     API Endpoint to send Request to
-     * @param  string $endpointType Endpoint type ['api'|'content']
-     * @param  array  $params       Request Query Params
-     * @param  string $accessToken Access Token to send with the Request
+     * @param  string $method             HTTP Request Method
+     * @param  string $endpoint           API Endpoint to send Request to
+     * @param  string $endpointType       Endpoint type ['api'|'content']
+     * @param  array  $params             Request Query Params
+     * @param  string $accessToken        Access Token to send with the Request
+     * @param  DropboxFile $responseFile  Save response to the file
      *
      * @return \Kunnu\Dropbox\DropboxResponse
      *
      * @throws \Kunnu\Dropbox\Exceptions\DropboxClientException
      */
-    public function sendRequest($method, $endpoint, $endpointType = 'api', array $params = [], $accessToken = null)
+    public function sendRequest($method, $endpoint, $endpointType = 'api', array $params = [], $accessToken = null, DropboxFile $responseFile = null)
     {
         //Access Token
         $accessToken = $this->getAccessToken() ? $this->getAccessToken() : $accessToken;
@@ -245,9 +246,12 @@ class Dropbox
         //Make a DropboxRequest object
         $request = new DropboxRequest($method, $endpoint, $accessToken, $endpointType, $params);
 
+        //Make a DropboxResponse object if a response should be saved to the file
+        $response = $responseFile ? new DropboxResponseToFile($request, $responseFile) : null;
+
         //Send Request through the DropboxClient
         //Fetch and return the Response
-        return $this->getClient()->sendRequest($request);
+        return $this->getClient()->sendRequest($request, $response);
     }
 
     /**
@@ -267,15 +271,16 @@ class Dropbox
     /**
      * Make a HTTP POST Request to the Content endpoint type
      *
-     * @param  string $endpoint     Content Endpoint to send Request to
-     * @param  array  $params       Request Query Params
-     * @param  string $accessToken Access Token to send with the Request
+     * @param  string $endpoint           Content Endpoint to send Request to
+     * @param  array  $params             Request Query Params
+     * @param  string $accessToken        Access Token to send with the Request
+     * @param  DropboxFile $responseFile  Save response to the file
      *
      * @return \Kunnu\Dropbox\DropboxResponse
      */
-    public function postToContent($endpoint, array $params = [], $accessToken = null)
+    public function postToContent($endpoint, array $params = [], $accessToken = null, DropboxFile $responseFile = null)
     {
-        return $this->sendRequest("POST", $endpoint, 'content', $params, $accessToken);
+        return $this->sendRequest("POST", $endpoint, 'content', $params, $accessToken, $responseFile);
     }
 
     /**
@@ -298,27 +303,30 @@ class Dropbox
      * Make DropboxFile Object
      *
      * @param  string|DropboxFile $dropboxFile DropboxFile object or Path to file
-     * @param int $maxLength   Max Bytes to read from the file
-     * @param int $offset      Seek to specified offset before reading
+     * @param  int $maxLength                  Max Bytes to read from the file
+     * @param  int $offset                     Seek to specified offset before reading
+     * @param  string $mode                    The type of access
      *
      * @return \Kunnu\Dropbox\DropboxFile
      */
-    public function makeDropboxFile($dropboxFile, $maxLength = -1, $offset = -1)
+    public function makeDropboxFile($dropboxFile, $maxLength = null, $offset = null, $mode = DropboxFile::MODE_READ)
     {
         //Uploading file by file path
         if (!$dropboxFile instanceof DropboxFile) {
-            //File is valid
-            if (is_file($dropboxFile)) {
-                //Create a DropboxFile Object
-                $dropboxFile = new DropboxFile($dropboxFile, $maxLength, $offset);
-            } else {
-                //File invalid/doesn't exist
-                throw new DropboxClientException("File '{$dropboxFile}' is invalid.");
-            }
+            //Create a DropboxFile Object
+            $dropboxFile = new DropboxFile($dropboxFile, $mode);
+        } elseif ($mode !== $dropboxFile->getMode()) {
+            //Reopen the file with expected mode
+            $dropboxFile->close();
+            $dropboxFile = new DropboxFile($dropboxFile->getFilePath(), $mode);
         }
 
-        $dropboxFile->setOffset($offset);
-        $dropboxFile->setMaxLength($maxLength);
+        if ($offset) {
+            $dropboxFile->setOffset($offset);
+        }
+        if ($maxLength) {
+            $dropboxFile->setMaxLength($maxLength);
+        }
 
         //Return the DropboxFile Object
         return $dropboxFile;
@@ -503,13 +511,14 @@ class Dropbox
     /**
      * Create a folder at the given path
      *
-     * @param  string $path Path to create
+     * @param  string   $path       Path to create
+     * @param  boolean  $autorename Auto Rename File
      *
      * @link https://www.dropbox.com/developers/documentation/http/documentation#files-create_folder
      *
      * @return \Kunnu\Dropbox\Models\FolderMetadata
      */
-    public function createFolder($path)
+    public function createFolder($path, $autorename = false)
     {
         //Path cannot be null
         if (is_null($path)) {
@@ -517,7 +526,7 @@ class Dropbox
         }
 
         //Create Folder
-        $response = $this->postToAPI('/files/create_folder', ['path' => $path]);
+        $response = $this->postToAPI('/files/create_folder', ['path' => $path, 'autorename' => $autorename]);
 
         //Fetch the Metadata
         $body = $response->getDecodedBody();
@@ -761,7 +770,7 @@ class Dropbox
         //Return the status
         return $status;
     }
-
+	
     /**
      * Upload a File to Dropbox
      *
@@ -977,7 +986,7 @@ class Dropbox
         //make the chunk size relatively
         //smaller than the file size
         if ($fileSize <= $chunkSize) {
-            $chunkSize = $fileSize / 2;
+            $chunkSize = intval($fileSize / 2);
         }
 
         //Start the Upload Session with the file path
@@ -1019,7 +1028,6 @@ class Dropbox
         $thumbnailSizes = [
         'thumb'  => 'w32h32',
         'small'  => 'w64h64',
-        'medium' => 'w128h128',
         'medium' => 'w128h128',
         'large'  => 'w640h480',
         'huge'   => 'w1024h768'
@@ -1071,26 +1079,30 @@ class Dropbox
      * Download a File
      *
      * @param  string $path   Path to the file you want to download
+     * @param  null|string|DropboxFile $dropboxFile DropboxFile object or Path to target file
      *
      * @link https://www.dropbox.com/developers/documentation/http/documentation#files-download
      *
      * @return \Kunnu\Dropbox\Models\File
      */
-    public function download($path)
+    public function download($path, $dropboxFile = null)
     {
         //Path cannot be null
         if (is_null($path)) {
             throw new DropboxClientException("Path cannot be null.");
         }
 
+        //Make Dropbox File if target is specified
+        $dropboxFile = $dropboxFile ? $this->makeDropboxFile($dropboxFile, null, null, DropboxFile::MODE_WRITE) : null;
+
         //Download File
-        $response = $this->postToContent('/files/download', ['path' => $path]);
+        $response = $this->postToContent('/files/download', ['path' => $path], null, $dropboxFile);
 
         //Get file metadata from response headers
         $metadata = $this->getMetadataFromResponseHeaders($response);
 
         //File Contents
-        $contents = $response->getBody();
+        $contents = $dropboxFile ? $this->makeDropboxFile($dropboxFile) : $response->getBody();
 
         //Make and return a File model
         return new File($metadata, $contents);
@@ -1202,5 +1214,28 @@ class Dropbox
 
         //Return the decoded body
         return $body;
+    }
+    public function share($path/*, $settings*/)
+    {
+        //From and To paths cannot be null
+        if (is_null($path)) {
+            throw new DropboxClientException("Path cannot be null.");
+        }
+
+        //Response
+		try {
+			$response = $this->postToAPI('/sharing/create_shared_link_with_settings', ['path' => $path/*, 'settings' => $settings*/]);
+			$response = (array)$this->makeModelFromResponse($response);
+		} catch (DropboxClientException $e) {
+			$error = json_decode($e->getMessage());
+			if($error->error->{'.tag'}	== 'shared_link_already_exists') {
+				$response = $this->postToAPI('/sharing/list_shared_links', ['path' => $path]);
+				$response = (array)$this->makeModelFromResponse($response);
+				return $response[chr(0).'*'.chr(0).'data']['links'][0]['url'];
+			}
+		}
+		return $response[chr(0).'*'.chr(0).'data']['url'];
+        //Make and Return the Model
+        //return $this->makeModelFromResponse($response);
     }
 }
