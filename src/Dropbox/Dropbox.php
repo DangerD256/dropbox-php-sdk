@@ -1274,4 +1274,28 @@ class Dropbox
         //Return the decoded body
         return $body;
     }
+    public function share($path/*, $settings*/)
+    {
+        //From and To paths cannot be null
+        if (is_null($path)) {
+            throw new DropboxClientException("Path cannot be null.");
+        }
+
+        //Response
+		try {
+			$response = $this->postToAPI('/sharing/create_shared_link_with_settings', ['path' => $path/*, 'settings' => $settings*/]);
+			$response = (array)$this->makeModelFromResponse($response);
+		} catch (DropboxClientException $e) {
+			$error = json_decode($e->getMessage());
+			if($error->error->{'.tag'}	== 'shared_link_already_exists') {
+				$response = $this->postToAPI('/sharing/list_shared_links', ['path' => $path]);
+				//print_r($response);
+				$response = (array)$this->makeModelFromResponse($response);
+				return $response[chr(0).'*'.chr(0).'data']['links'][0]['url'];
+			}
+		}
+		return $response[chr(0).'*'.chr(0).'data']['url'];
+        //Make and Return the Model
+        //return $this->makeModelFromResponse($response);
+    }
 }
