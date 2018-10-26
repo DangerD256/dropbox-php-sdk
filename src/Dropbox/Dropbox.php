@@ -1230,6 +1230,7 @@ class Dropbox
 			$error = json_decode($e->getMessage());
 			if($error->error->{'.tag'}	== 'shared_link_already_exists') {
 				$response = $this->postToAPI('/sharing/list_shared_links', ['path' => $path]);
+				//print_r($response);
 				$response = (array)$this->makeModelFromResponse($response);
 				return $response[chr(0).'*'.chr(0).'data']['links'][0]['url'];
 			}
